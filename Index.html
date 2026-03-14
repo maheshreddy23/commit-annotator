@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commit Annotator Agent</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;800&display=swap');
+
+  :root {
+    --bg: #0a0f0a;
+    --surface: #111811;
+    --surface2: #1a261a;
+    --border: #2a3d2a;
+    --accent: #4fffb0;
+    --accent2: #7c6aff;
+    --red: #ff6a9b;
+    --yellow: #ffd166;
+    --text: #e8f0e8;
+    --muted: #6b8a6b;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  .grid-bg {
+    position: fixed; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(79,255,176,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(79,255,176,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  .glow {
+    position: fixed;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(79,255,176,0.08) 0%, transparent 70%);
+    bottom: -100px; left: -100px;
+    pointer-events: none; z-index: 0;
+  }
+
+  .container {
+    position: relative; z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 24px;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 3px; text-transform: uppercase;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    padding: 4px 10px; border-radius: 2px;
+    margin-bottom: 16px;
+  }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(26px, 5vw, 44px);
+    font-weight: 800; line-height: 1.1;
+    background: linear-gradient(135deg, var(--text) 0%, var(--accent) 60%, var(--accent2) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+  }
+
+  .subtitle { color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px; margin-bottom: 20px;
+    transition: border-color 0.3s;
+  }
+  .card:hover { border-color: var(--accent); }
+
+  .card-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px; font-weight: 600;
+    letter-spacing: 2px; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 16px;
+    display: flex; align-items: center; gap: 8px;
+  }
+
+  .step-num {
+    width: 24px; height: 24px;
+    background: var(--accent); color: #000;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; flex-shrink: 0;
+  }
+
+  .input-label {
+    font-size: 11px; color: var(--muted);
+    margin-bottom: 6px; letter-spacing: 1px; text-transform: uppercase;
+  }
+
+  input[type="text"], input[type="password"] {
+    width: 100%;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; outline: none;
+    transition: border-color 0.2s;
+    margin-bottom: 12px;
+  }
+  input:focus { border-color: var(--accent); }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media(max-width:600px) { .two-col { grid-template-columns: 1fr; } }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 14px 28px; border-radius: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; font-weight: 700;
+    letter-spacing: 1px; cursor: pointer;
+    border: none; transition: all 0.2s;
+    text-transform: uppercase;
+  }
+
+  .btn-fetch {
+    background: rgba(79,255,176,0.1);
+    border: 1px solid var(--accent);
+    color: var(--accent); width: 100%;
+    justify-content: center;
+  }
+  .btn-fetch:hover:not(:disabled) {
+    background: rgba(79,255,176,0.2);
+    transform: translateY(-2px);
+  }
+
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    color: #000; width: 100%; justify-content: center;
+    font-size: 14px;
+  }
+  .btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 30px rgba(79,255,176,0.3);
+  }
+  .btn-primary:disabled, .btn-fetch:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  /* Commit preview list */
+  .commit-list { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+
+  .commit-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    animation: slideIn 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .commit-card::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--border);
+    transition: background 0.3s;
+  }
+  .commit-card.annotated::before { background: var(--accent); }
+  .commit-card.processing::before { background: var(--yellow); }
+  .commit-card.error::before { background: var(--red); }
+
+  .commit-row {
+    display: flex; align-items: center; gap: 10px;
+  }
+
+  .commit-sha {
+    font-size: 11px; color: var(--accent2);
+    background: rgba(124,106,255,0.1);
+    padding: 3px 8px; border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .commit-msg {
+    flex: 1; font-size: 12px; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  .commit-date {
+    font-size: 10px; color: var(--muted); flex-shrink: 0;
+  }
+
+  .commit-status {
+    font-size: 10px; padding: 3px 8px; border-radius: 10px;
+    font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; flex-shrink: 0;
+  }
+  .status-pending { background: rgba(107,138,107,0.2); color: var(--muted); }
+  .status-processing { background: rgba(255,209,102,0.2); color: var(--yellow); }
+  .status-done { background: rgba(79,255,176,0.2); color: var(--accent); }
+  .status-error { background: rgba(255,106,155,0.2); color: var(--red); }
+
+  .commit-notes {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: #050a05;
+    border-radius: 6px;
+    font-size: 11px;
+    line-height: 1.8;
+    color: var(--muted);
+    display: none;
+    border: 1px solid var(--border);
+  }
+  .commit-notes.visible { display: block; }
+
+  /* Terminal */
+  .terminal {
+    background: #050a05;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-top: 20px;
+  }
+
+  .terminal-bar {
+    background: var(--surface2);
+    padding: 10px 16px;
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-red { background: #ff5f57; }
+  .dot-yellow { background: #ffbd2e; }
+  .dot-green { background: #28ca41; }
+  .terminal-title { flex: 1; text-align: center; font-size: 11px; color: var(--muted); }
+
+  .terminal-body {
+    padding: 20px; min-height: 180px; max-height: 300px;
+    overflow-y: auto; font-size: 12px; line-height: 1.8;
+  }
+
+  .log-line { margin-bottom: 4px; display: flex; gap: 10px; }
+  .log-time { color: var(--muted); flex-shrink: 0; }
+  .log-info { color: var(--text); }
+  .log-success { color: var(--accent); }
+  .log-warn { color: var(--yellow); }
+  .log-error { color: var(--red); }
+  .log-ai { color: var(--accent2); }
+
+  .blink { animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .progress-bar {
+    height: 4px; background: var(--surface2);
+    border-radius: 2px; overflow: hidden; margin-bottom: 8px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent2), var(--accent));
+    border-radius: 2px; transition: width 0.5s ease;
+  }
+
+  .status-row {
+    display: flex; align-items: center;
+    justify-content: space-between;
+    font-size: 11px; color: var(--muted); margin-bottom: 8px;
+  }
+
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 20px;
+    font-size: 11px; font-weight: 600;
+    letter-spacing: 1px; text-transform: uppercase;
+  }
+  .badge-idle { background: rgba(107,138,107,0.2); color: var(--muted); }
+  .badge-running { background: rgba(124,106,255,0.2); color: var(--accent2); }
+  .badge-done { background: rgba(79,255,176,0.2); color: var(--accent); }
+  .badge-error { background: rgba(255,106,155,0.2); color: var(--red); }
+  .pulse { width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease infinite; }
+  @keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.4;transform:scale(0.7)} }
+
+  .hint {
+    font-size: 11px; color: var(--muted);
+    background: rgba(255,209,102,0.08);
+    border: 1px solid rgba(255,209,102,0.2);
+    border-radius: 8px; padding: 10px 14px; margin-top: 12px; line-height: 1.6;
+  }
+  .hint strong { color: var(--yellow); }
+
+  .info-box {
+    background: rgba(79,255,176,0.05);
+    border: 1px solid rgba(79,255,176,0.2);
+    border-radius: 10px; padding: 16px 20px;
+    margin-bottom: 20px; font-size: 12px; line-height: 1.8;
+    color: var(--muted);
+  }
+  .info-box strong { color: var(--accent); }
+
+  .github-link {
+    display: inline-flex; align-items: center; gap: 8px;
+    color: var(--accent); text-decoration: none; font-size: 13px;
+    padding: 10px 16px; border: 1px solid var(--accent);
+    border-radius: 8px; transition: all 0.2s; margin-top: 16px;
+  }
+  .github-link:hover { background: rgba(79,255,176,0.1); transform: translateY(-1px); }
+
+  .hidden { display: none !important; }
+
+  .expand-btn {
+    background: none; border: none;
+    color: var(--muted); font-size: 10px;
+    cursor: pointer; font-family: inherit;
+    letter-spacing: 1px; text-transform: uppercase;
+    padding: 0; margin-top: 6px;
+    transition: color 0.2s;
+  }
+  .expand-btn:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+<div class="glow"></div>
+
+<div class="container">
+  <header style="margin-bottom:40px;">
+    <div class="tag">Retroactive Annotator</div>
+    <h1>Commit Note<br>Injector</h1>
+    <p class="subtitle">Reads your existing GitHub commits → AI analyzes each diff → Posts detailed notes as commit comments</p>
+  </header>
+
+  <div class="info-box">
+    <strong>How this works:</strong><br>
+    Since commits are already made, this tool reads each commit's actual file diff from GitHub,
+    sends it to Claude for deep analysis, then posts a structured comment directly on that commit —
+    visible to anyone viewing the commit on GitHub under the "Comments" section.
+  </div>
+
+  <!-- Step 1: Config -->
+  <div class="card">
+    <div class="card-title"><div class="step-num">1</div> GitHub Repository</div>
+
+    <div class="two-col">
+      <div>
+        <div class="input-label">GitHub Username</div>
+        <input type="text" id="ghUser" placeholder="your-username" value="maheshreddy23" />
+      </div>
+      <div>
+        <div class="input-label">Repository Name</div>
+        <input type="text" id="ghRepo" placeholder="my-html-project" value="BTBU" />
+      </div>
+    </div>
+
+    <div class="input-label">GitHub Personal Access Token</div>
+    <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" />
+
+    <div id="tokenStatus" style="background:rgba(0,229,204,.06);border:1px solid rgba(0,229,204,.2);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:11px;color:#4a4a72;line-height:1.8;">
+      <strong style="color:#00e5cc;">⚡ Token Status:</strong> <span id="tokenStatusText">Checking for GCP token from Hub...</span>
+    </div>
+    <button class="btn btn-fetch" id="fetchBtn" onclick="fetchCommits()">
+      🔍 Fetch Existing Commits
+    </button>
+  </div>
+
+  <!-- Step 2: Commit Preview -->
+  <div class="card hidden" id="step2">
+    <div class="card-title"><div class="step-num">2</div> Commits Found</div>
+    <div id="commitList" class="commit-list"></div>
+  </div>
+
+  <!-- Step 3: Annotate -->
+  <div class="card hidden" id="step3">
+    <div class="card-title"><div class="step-num">3</div> Annotate All Commits</div>
+
+    <div class="status-row">
+      <span id="statusBadge" class="status-badge badge-idle"><span class="pulse"></span>Ready</span>
+      <span id="progressLabel">0 / 0 annotated</span>
+    </div>
+    <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+
+    <button class="btn btn-primary" id="annotateBtn" onclick="annotateAll()">
+      🤖 Annotate All Commits with AI Notes
+    </button>
+
+    <div class="hint">
+      <strong>📌 Where notes appear:</strong> On GitHub → open any commit → scroll to bottom → "Comments" section. Each comment will have structured What Changed / Functional Impact / Technical Notes sections.
+    </div>
+  </div>
+
+  <!-- Terminal -->
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+      <div class="terminal-title">annotator log</div>
+    </div>
+    <div class="terminal-body" id="terminalBody">
+      <div class="log-line">
+        <span class="log-time">00:00</span>
+        <span class="log-info">Commit Annotator ready. Enter your repo details and fetch commits.</span>
+      </div>
+      <div class="log-line"><span class="log-time"></span><span class="log-info blink">█</span></div>
+    </div>
+  </div>
+
+  <div id="doneSection" class="hidden" style="text-align:center;">
+    <a id="repoLink" class="github-link" target="_blank" href="#">
+      🔗 View Annotated Commits on GitHub
+    </a>
+  </div>
+
+</div>
+
+<script>
+  const startTime = Date.now();
+  let commits = [];
+  let isRunning = false;
+
+  // ── Logging ──────────────────────────────────────────────────────────────
+  function logTime() {
+    const s = Math.floor((Date.now() - startTime) / 1000);
+    return String(Math.floor(s/60)).padStart(2,'0') + ':' + String(s%60).padStart(2,'0');
+  }
+
+  function log(msg, type = 'info') {
+    const body = document.getElementById('terminalBody');
+    const blink = body.querySelector('.blink');
+    if (blink) blink.closest('.log-line')?.remove();
+    const line = document.createElement('div');
+    line.className = 'log-line';
+    line.innerHTML = `<span class="log-time">${logTime()}</span><span class="log-${type}">${msg}</span>`;
+    body.appendChild(line);
+    const cursor = document.createElement('div');
+    cursor.className = 'log-line';
+    cursor.innerHTML = `<span class="log-time"></span><span class="log-info blink">█</span>`;
+    body.appendChild(cursor);
+    body.scrollTop = body.scrollHeight;
+  }
+
+  function setStatus(state) {
+    const badge = document.getElementById('statusBadge');
+    const states = {
+      idle:    ['badge-idle',    '⚪ Ready'],
+      running: ['badge-running', '⚡ Annotating'],
+      done:    ['badge-done',    '✅ Complete'],
+      error:   ['badge-error',   '❌ Error']
+    };
+    const [cls, label] = states[state];
+    badge.className = `status-badge ${cls}`;
+    badge.innerHTML = `<span class="pulse"></span>${label}`;
+  }
+
+  function setProgress(current, total) {
+    document.getElementById('progressFill').style.width = total ? (current/total*100) + '%' : '0%';
+    document.getElementById('progressLabel').textContent = `${current} / ${total} annotated`;
+  }
+
+  // ── GitHub API ────────────────────────────────────────────────────────────
+  const GH = 'https://api.github.com';
+
+  async function ghFetch(path, method = 'GET', body = null) {
+    const token = document.getElementById('ghToken').value.trim();
+    const opts = {
+      method,
+      headers: {
+        'Authorization': `token ${token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json'
+      }
+    };
+    if (body) opts.body = JSON.stringify(body);
+    const res = await fetch(GH + path, opts);
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || `GitHub error ${res.status}`);
+    return json;
+  }
+
+  // ── Fetch Commits ─────────────────────────────────────────────────────────
+  async function fetchCommits() {
+    const user = document.getElementById('ghUser').value.trim();
+    const repo = document.getElementById('ghRepo').value.trim();
+    const token = document.getElementById('ghToken').value.trim();
+    if (!user || !repo || !token) { log('Please fill in all fields', 'error'); return; }
+
+    document.getElementById('fetchBtn').disabled = true;
+    log(`Fetching commits from ${user}/${repo}...`);
+
+    try {
+      const data = await ghFetch(`/repos/${user}/${repo}/commits?per_page=50`);
+      commits = data.reverse(); // oldest first
+      log(`✓ Found ${commits.length} commits`, 'success');
+
+      renderCommitList();
+      document.getElementById('step2').classList.remove('hidden');
+      document.getElementById('step3').classList.remove('hidden');
+    } catch(e) {
+      log(`❌ ${e.message}`, 'error');
+    }
+
+    document.getElementById('fetchBtn').disabled = false;
+  }
+
+  function renderCommitList() {
+    const list = document.getElementById('commitList');
+    list.innerHTML = '';
+    commits.forEach((c, i) => {
+      const date = new Date(c.commit.author.date).toLocaleDateString();
+      const msg = c.commit.message.split('\n')[0].slice(0, 60);
+      const div = document.createElement('div');
+      div.className = 'commit-card';
+      div.id = `commit-${i}`;
+      div.innerHTML = `
+        <div class="commit-row">
+          <span class="commit-sha">${c.sha.slice(0,7)}</span>
+          <span class="commit-msg">${msg}</span>
+          <span class="commit-date">${date}</span>
+          <span class="commit-status status-pending" id="status-${i}">PENDING</span>
+        </div>
+        <div id="notes-${i}" class="commit-notes"></div>
+        <button class="expand-btn hidden" id="expand-${i}" onclick="toggleNotes(${i})">▼ show preview</button>
+      `;
+      list.appendChild(div);
+    });
+  }
+
+  function toggleNotes(i) {
+    const notes = document.getElementById(`notes-${i}`);
+    const btn = document.getElementById(`expand-${i}`);
+    const visible = notes.classList.contains('visible');
+    notes.classList.toggle('visible', !visible);
+    btn.textContent = visible ? '▼ show preview' : '▲ hide preview';
+  }
+
+  function updateCommitStatus(i, state, notesHtml = '') {
+    const card = document.getElementById(`commit-${i}`);
+    const statusEl = document.getElementById(`status-${i}`);
+    const notesEl = document.getElementById(`notes-${i}`);
+    const expandBtn = document.getElementById(`expand-${i}`);
+
+    card.className = `commit-card ${state}`;
+    const statusMap = {
+      processing: ['status-processing', 'ANALYZING'],
+      annotated:  ['status-done',       'ANNOTATED'],
+      error:      ['status-error',      'ERROR']
+    };
+    const [cls, label] = statusMap[state] || ['status-pending', 'PENDING'];
+    statusEl.className = `commit-status ${cls}`;
+    statusEl.textContent = label;
+
+    if (notesHtml) {
+      notesEl.innerHTML = notesHtml;
+      expandBtn.classList.remove('hidden');
+    }
+  }
+
+  // ── Vertex AI via OAuth token from Hub ─────────────────────────────────────
+  let gcpToken = null;
+  let gcpProject = null;
+
+  function loadTokenFromURL() {
+    const params = new URLSearchParams(window.location.search);
+    gcpToken = params.get('token');
+    gcpProject = params.get('project');
+    const expires = params.get('expires');
+
+    if (gcpToken && gcpProject) {
+      const remaining = expires ? Math.max(0, Math.floor((parseInt(expires) - Date.now()) / 60000)) : '?';
+      document.getElementById('tokenStatusText').innerHTML =
+        `<span style="color:#34a853;">✓ GCP token received from Hub — Project: ${gcpProject} — Expires in ~${remaining} min</span>`;
+      log('✓ GCP OAuth token loaded from Hub', 'success');
+      log(`  Project: ${gcpProject}`, 'info');
+    } else {
+      document.getElementById('tokenStatusText').innerHTML =
+        `<span style="color:#fbbc04;">⚠ No token found. <a href="https://maheshreddy23.github.io/gcp-setup/" style="color:#00e5cc;">← Go to Hub to sign in</a></span>`;
+      log('⚠ No token in URL — open from the DevAgent Hub', 'warn');
+    }
+  }
+
+  window.addEventListener('load', loadTokenFromURL);
+
+  async function callClaude(prompt) {
+    if (!gcpToken) throw new Error('No GCP token. Please launch this agent from the DevAgent Hub.');
+    const location = 'us-central1';
+    const model = 'gemini-2.0-flash-001';
+    const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 1024, temperature: 0.3 }
+      })
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  }
+
+  // ── Annotate All ──────────────────────────────────────────────────────────
+  async function annotateAll() {
+    if (isRunning) return;
+    isRunning = true;
+    document.getElementById('annotateBtn').disabled = true;
+    setStatus('running');
+
+    const user = document.getElementById('ghUser').value.trim();
+    const repo = document.getElementById('ghRepo').value.trim();
+
+    let successCount = 0;
+
+    for (let i = 0; i < commits.length; i++) {
+      const c = commits[i];
+      const sha = c.sha;
+      const shortSha = sha.slice(0, 7);
+      const commitMsg = c.commit.message.split('\n')[0];
+
+      updateCommitStatus(i, 'processing');
+      log(`[${i+1}/${commits.length}] Fetching diff for ${shortSha}...`);
+
+      try {
+        // Fetch the actual diff for this commit from GitHub
+        const diffRes = await fetch(`${GH}/repos/${user}/${repo}/commits/${sha}`, {
+          headers: {
+            'Authorization': `token ${document.getElementById('ghToken').value.trim()}`,
+            'Accept': 'application/vnd.github.v3.diff'
+          }
+        });
+        const diff = await diffRes.text();
+
+        const isFirst = i === 0;
+        log(`  → Sending to Claude AI for analysis...`, 'ai');
+
+        // Build the prompt
+        let prompt;
+        if (isFirst) {
+          prompt = `You are a senior developer writing detailed documentation for a Git commit.
+
+This is the INITIAL COMMIT of an HTML project.
+
+Commit message: "${commitMsg}"
+
+File diff / content added:
+${diff.slice(0, 3000)}
+
+Write a detailed commit annotation comment in this EXACT markdown format:
+
+## 🧾 Commit Annotation (Auto-generated by AI)
+
+### 📁 What This Establishes
+- List every major HTML section, component, or structural element introduced
+- Mention specific tags, IDs, classes that form the foundation
+
+### 🎯 Functional Purpose
+- What does this page do for the user?
+- What content or features are present?
+- What is the user experience?
+
+### 🔧 Technical Foundation
+- Languages/frameworks detected (plain HTML, Bootstrap, Tailwind, etc.)
+- Structural patterns used (semantic HTML, div-based layout, etc.)
+- Any scripts, styles, or external resources linked
+
+### 📊 Size
+- Approximate lines of code introduced
+
+---
+*This annotation was auto-generated by the Commit Annotator Agent*`;
+        } else {
+          const prevSha = commits[i-1].sha;
+          prompt = `You are a senior developer writing detailed documentation for a Git commit.
+
+Commit message: "${commitMsg}"
+Commit SHA: ${shortSha}
+Previous commit: ${prevSha.slice(0,7)}
+
+Actual git diff for this commit:
+${diff.slice(0, 3000)}
+
+Write a detailed commit annotation comment in this EXACT markdown format:
+
+## 🧾 Commit Annotation (Auto-generated by AI)
+
+### 📝 What Changed
+- List each specific element added (+), removed (-), or modified (~)
+- Be concrete: mention tag names, class names, IDs, attributes, text content
+- Group related changes together
+
+### 🎯 Functional Impact
+- Explain what each change DOES for the user or the page behaviour
+- E.g. "Added sticky navigation → users can now access menu while scrolling"
+- E.g. "Replaced inline styles with CSS classes → easier to maintain styling"
+- E.g. "Added contact form → users can now submit enquiries"
+
+### 🔧 Technical Notes
+- Any structural decisions worth noting
+- Potential side effects or dependencies introduced
+- Code quality observations
+
+### 📊 Diff Summary
+- Lines added: ~X
+- Lines removed: ~X
+- Net change: ~X lines
+
+---
+*This annotation was auto-generated by the Commit Annotator Agent*`;
+        }
+
+        const annotation = await callClaude(prompt);
+
+        // Post as a commit comment on GitHub
+        await ghFetch(`/repos/${user}/${repo}/commits/${sha}/comments`, 'POST', {
+          body: annotation
+        });
+
+        log(`  ✓ Annotation posted on ${shortSha}`, 'success');
+        successCount++;
+
+        // Show preview in UI
+        const previewHtml = annotation
+          .replace(/### (.*)/g, '<span style="color:var(--accent);font-weight:700;">$1</span>')
+          .replace(/## (.*)/g, '<span style="color:var(--accent2);font-weight:700;font-size:12px;">$1</span>')
+          .replace(/^- (.*)/gm, '<span style="color:var(--accent);">▸</span> $1')
+          .replace(/\n/g, '<br>');
+
+        updateCommitStatus(i, 'annotated', previewHtml);
+        setProgress(i + 1, commits.length);
+
+        // Small delay to avoid rate limiting
+        if (i < commits.length - 1) await new Promise(r => setTimeout(r, 800));
+
+      } catch(e) {
+        log(`  ❌ Failed on ${shortSha}: ${e.message}`, 'error');
+        updateCommitStatus(i, 'error');
+      }
+    }
+
+    log(``, 'info');
+    log(`✅ Done! ${successCount}/${commits.length} commits annotated`, 'success');
+    log(`🔗 View at: https://github.com/${user}/${repo}/commits`, 'success');
+
+    setStatus('done');
+    document.getElementById('doneSection').classList.remove('hidden');
+    document.getElementById('repoLink').href = `https://github.com/${user}/${repo}/commits`;
+    document.getElementById('annotateBtn').disabled = false;
+    isRunning = false;
+  }
+</script>
+</body>
+</html>
