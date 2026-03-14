@@ -331,6 +331,7 @@
   }
   .expand-btn:hover { color: var(--accent); }
 </style>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -369,10 +370,32 @@
     <div class="input-label">GitHub Personal Access Token</div>
     <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" />
 
-    <div class="input-label">Gemini API Key</div>
-    <input type="password" id="geminiKey" placeholder="AIzaSy-xxxxxxxxxxxxxxxxxxxx" />
+    <!-- Auth mode tabs -->
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <button id="tabGcp" onclick="setAuthMode('gcp')" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--accent);background:rgba(79,255,176,.1);color:var(--accent);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:1px;text-transform:uppercase;">🔐 GCP OAuth</button>
+      <button id="tabGemini" onclick="setAuthMode('gemini')" style="flex:1;padding:8px;border-radius:8px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:inherit;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:1px;text-transform:uppercase;">🔑 Gemini Key</button>
+    </div>
+
+    <!-- GCP OAuth mode -->
+    <div id="gcpAuthDiv">
+      <div class="input-label">GCP Project ID</div>
+      <input type="text" id="gcpProjectId" placeholder="my-project-123456" />
+      <div class="input-label">OAuth2 Client ID</div>
+      <input type="text" id="clientId" placeholder="xxxxx.apps.googleusercontent.com" />
+      <button class="btn btn-fetch" onclick="signInWithGCP()" id="gcpLoginBtn" style="margin-bottom:12px;">
+        🔐 Sign in with Google (Vertex AI)
+      </button>
+    </div>
+
+    <!-- Gemini API Key mode -->
+    <div id="geminiAuthDiv" style="display:none;">
+      <div class="input-label">Gemini API Key</div>
+      <input type="password" id="geminiKey" placeholder="AIzaSy-xxxxxxxxxxxxxxxxxxxx" />
+      <div style="font-size:10px;color:var(--muted);margin-bottom:12px;">Get free key at <a href="https://aistudio.google.com" target="_blank" style="color:var(--accent);">aistudio.google.com</a></div>
+    </div>
+
     <div id="tokenStatus" style="background:rgba(0,229,204,.06);border:1px solid rgba(0,229,204,.2);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:11px;color:#4a4a72;line-height:1.8;">
-      <strong style="color:#00e5cc;">⚡ Status:</strong> <span id="tokenStatusText">Enter your Gemini API key above — get it free from aistudio.google.com</span>
+      <strong style="color:#00e5cc;">⚡ Status:</strong> <span id="tokenStatusText">Select auth mode above</span>
     </div>
     <button class="btn btn-fetch" id="fetchBtn" onclick="fetchCommits()">
       🔍 Fetch Existing Commits
@@ -573,12 +596,100 @@
     }
   }
 
-  // ── Gemini API ────────────────────────────────────────────────────────────
-  // Models to try in order — fetched live from Gemini API
+  // ── Auth State ───────────────────────────────────────────────────────────
   let activeModel = null;
+  let authMode = 'gcp'; // 'gcp' or 'gemini'
+  let gcpAccessToken = null;
+  let gcpProject = null;
+  let tokenClient = null;
+
+  // Check if launched from Hub with token in URL
+  window.addEventListener('load', () => {
+    const params = new URLSearchParams(window.location.search);
+    const urlToken = params.get('token');
+    const urlProject = params.get('project');
+    if (urlToken && urlProject) {
+      gcpAccessToken = urlToken;
+      gcpProject = urlProject;
+      authMode = 'gcp';
+      const mins = params.get('expires') ? Math.max(0, Math.floor((parseInt(params.get('expires')) - Date.now()) / 60000)) : '?';
+      document.getElementById('tokenStatusText').innerHTML =
+        `<span style="color:#34a853;">✓ GCP token from Hub — Project: ${urlProject} — ~${mins}min left</span>`;
+      log(`✓ GCP token loaded from Hub (Project: ${urlProject})`, 's');
+    } else {
+      document.getElementById('tokenStatusText').textContent = 'Select auth mode above';
+    }
+  });
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    document.getElementById('gcpAuthDiv').style.display  = mode === 'gcp'    ? 'block' : 'none';
+    document.getElementById('geminiAuthDiv').style.display = mode === 'gemini' ? 'block' : 'none';
+    document.getElementById('tabGcp').style.background    = mode === 'gcp'    ? 'rgba(79,255,176,.1)' : 'transparent';
+    document.getElementById('tabGcp').style.borderColor   = mode === 'gcp'    ? 'var(--accent)' : 'var(--border)';
+    document.getElementById('tabGcp').style.color         = mode === 'gcp'    ? 'var(--accent)' : 'var(--muted)';
+    document.getElementById('tabGemini').style.background  = mode === 'gemini' ? 'rgba(79,255,176,.1)' : 'transparent';
+    document.getElementById('tabGemini').style.borderColor = mode === 'gemini' ? 'var(--accent)' : 'var(--border)';
+    document.getElementById('tabGemini').style.color       = mode === 'gemini' ? 'var(--accent)' : 'var(--muted)';
+  }
+
+  function signInWithGCP() {
+    const projId  = document.getElementById('gcpProjectId').value.trim();
+    const clientId = document.getElementById('clientId').value.trim();
+    if (!projId || !clientId) { log('Enter GCP Project ID and OAuth2 Client ID', 'e'); return; }
+    if (typeof google === 'undefined') { log('GSI library not loaded yet, try again in a moment', 'w'); return; }
+
+    gcpProject = projId;
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/cloud-platform',
+      callback: (resp) => {
+        if (resp.error) { log('GCP sign-in failed: ' + resp.error, 'e'); return; }
+        gcpAccessToken = resp.access_token;
+        log('✓ Signed in with Google — Vertex AI ready', 's');
+        document.getElementById('tokenStatusText').innerHTML =
+          `<span style="color:#34a853;">✓ GCP OAuth active — Project: ${gcpProject}</span>`;
+      }
+    });
+    tokenClient.requestAccessToken({ prompt: 'select_account' });
+  }
+
+  // ── Gemini API ────────────────────────────────────────────────────────────
 
   async function discoverModel() {
     if (activeModel) return activeModel;
+
+    // GCP OAuth mode → use Vertex AI
+    if (authMode === 'gcp' && gcpAccessToken) {
+      log('🔍 Fetching Vertex AI models...', 'w');
+      const location = 'us-central1';
+      const MODELS = ['gemini-3.1-flash-lite-preview','gemini-3.1-pro-preview','gemini-3-flash-preview','gemini-2.0-flash','gemini-1.5-flash'];
+      for (const model of MODELS) {
+        try {
+          log(`  Testing ${model}...`);
+          const res = await fetch(
+            `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`,
+            {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${gcpAccessToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ role:'user', parts:[{ text:'Say yes.' }] }], generationConfig:{ maxOutputTokens:5 } })
+            }
+          );
+          const data = await res.json();
+          if (!data.error && data.candidates) {
+            activeModel = model;
+            log(`  ✓ Vertex AI model: ${model}`, 's');
+            document.getElementById('tokenStatusText').innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
+            return model;
+          }
+          log(`  ✗ ${model}: ${data.error?.message?.slice(0,50)||'failed'}`, 'e');
+        } catch(e) { log(`  ✗ ${model}: ${e.message.slice(0,50)}`, 'e'); }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      throw new Error('No Vertex AI model available. Try Gemini API key mode instead.');
+    }
+
+    // Gemini API key mode
     const key = document.getElementById('geminiKey').value.trim();
     if (!key) throw new Error('Please enter your Gemini API key');
 
@@ -638,9 +749,30 @@
   }
 
   async function callClaude(prompt) {
+    const model = await discoverModel();
+
+    // GCP OAuth → Vertex AI
+    if (authMode === 'gcp' && gcpAccessToken) {
+      const location = 'us-central1';
+      const res = await fetch(
+        `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`,
+        {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${gcpAccessToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: 1024, temperature: 0.3 }
+          })
+        }
+      );
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    }
+
+    // Gemini API key
     const key = document.getElementById('geminiKey').value.trim();
     if (!key) throw new Error('Please enter your Gemini API key');
-    const model = await discoverModel();
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
       {
