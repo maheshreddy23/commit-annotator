@@ -369,8 +369,10 @@
     <div class="input-label">GitHub Personal Access Token</div>
     <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" />
 
+    <div class="input-label">Gemini API Key</div>
+    <input type="password" id="geminiKey" placeholder="AIzaSy-xxxxxxxxxxxxxxxxxxxx" />
     <div id="tokenStatus" style="background:rgba(0,229,204,.06);border:1px solid rgba(0,229,204,.2);border-radius:10px;padding:12px 16px;margin-bottom:14px;font-size:11px;color:#4a4a72;line-height:1.8;">
-      <strong style="color:#00e5cc;">⚡ Token Status:</strong> <span id="tokenStatusText">Checking for GCP token from Hub...</span>
+      <strong style="color:#00e5cc;">⚡ Status:</strong> <span id="tokenStatusText">Enter your Gemini API key above — get it free from aistudio.google.com</span>
     </div>
     <button class="btn btn-fetch" id="fetchBtn" onclick="fetchCommits()">
       🔍 Fetch Existing Commits
@@ -571,32 +573,76 @@
     }
   }
 
-  // ── Vertex AI via OAuth token from Hub ─────────────────────────────────────
-  let gcpToken = null;
-  let gcpProject = null;
+  // ── Gemini API ────────────────────────────────────────────────────────────
+  // Models to try in order — fetched live from Gemini API
+  let activeModel = null;
 
-  function loadTokenFromURL() {
-    const params = new URLSearchParams(window.location.search);
-    gcpToken = params.get('token');
-    gcpProject = params.get('project');
-    const expires = params.get('expires');
+  async function discoverModel() {
+    if (activeModel) return activeModel;
+    const key = document.getElementById('geminiKey').value.trim();
+    if (!key) throw new Error('Please enter your Gemini API key');
 
-    if (gcpToken && gcpProject) {
-      const remaining = expires ? Math.max(0, Math.floor((parseInt(expires) - Date.now()) / 60000)) : '?';
-      document.getElementById('tokenStatusText').innerHTML =
-        `<span style="color:#34a853;">✓ GCP token received from Hub — Project: ${gcpProject} — Expires in ~${remaining} min</span>`;
-      log('✓ GCP OAuth token loaded from Hub', 's');
-      log(`  Project: ${gcpProject}`, 'i');
-    } else {
-      document.getElementById('tokenStatusText').innerHTML =
-        `<span style="color:#fbbc04;">⚠ No token found. <a href="https://maheshreddy23.github.io/gcp-setup/" style="color:#00e5cc;">← Go to Hub to sign in</a></span>`;
-      log('⚠ No token in URL — open from the DevAgent Hub', 'w');
+    log('🔍 Fetching available models from Gemini API...', 'w');
+
+    try {
+      // Fetch real list of available models
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message);
+
+      // Filter to models that support generateContent
+      const models = (data.models || [])
+        .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
+        .map(m => m.name.replace('models/', ''));
+
+      log(`  Found ${models.length} available models`, 's');
+
+      // Priority order — flash first (faster/cheaper), pro second
+      const priority = ['flash', 'pro'];
+      const sorted = models.sort((a, b) => {
+        const pa = priority.findIndex(p => a.includes(p));
+        const pb = priority.findIndex(p => b.includes(p));
+        return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+      });
+
+      log(`  Top models: ${sorted.slice(0,4).join(', ')}`, 'i');
+
+      // Test top models until one works
+      for (const model of sorted.slice(0, 6)) {
+        try {
+          log(`  Testing ${model}...`);
+          const testRes = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: 'Say yes.' }] }],
+                generationConfig: { maxOutputTokens: 5 }
+              })
+            }
+          );
+          const testData = await testRes.json();
+          if (!testData.error && testData.candidates) {
+            activeModel = model;
+            log(`  ✓ Using model: ${model}`, 's');
+            document.getElementById('tokenStatusText').innerHTML =
+              `<span style="color:#4fffb0;">✓ Gemini API ready &nbsp;|&nbsp; 🤖 ${model}</span>`;
+            return model;
+          } else {
+            log(`  ✗ ${model}: ${testData.error?.message?.slice(0,50) || 'failed'}`, 'e');
+          }
+        } catch(e) {
+          log(`  ✗ ${model}: ${e.message.slice(0,50)}`, 'e');
+        }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      throw new Error('No working model found. Check your API key is valid.');
+
+    } catch(e) {
+      throw new Error(`Model discovery failed: ${e.message}`);
     }
   }
-
-  window.addEventListener('load', loadTokenFromURL);
-
-  let activeModel = null;
 
   async function discoverModel() {
     if (activeModel) return activeModel;
@@ -638,26 +684,41 @@
       for (const model of sorted) {
         try {
           log(`  Testing ${model}...`);
-          const testUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
-          const testRes = await fetch(testUrl, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
-              generationConfig: { maxOutputTokens: 5, temperature: 0 }
-            })
-          });
-          const testData = await testRes.json();
-          if (!testData.error && testData.candidates) {
-            activeModel = model;
-            log(`  ✓ Active model: ${model}`, 's');
-            const statusEl = document.getElementById('tokenStatusText');
-            if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
-            return model;
+          // Try both v1 and v1beta endpoints
+          const endpoints = [
+            `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`,
+            `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`
+          ];
+          let worked = false;
+          for (const testUrl of endpoints) {
+            try {
+              const testRes = await fetch(testUrl, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ role: 'user', parts: [{ text: 'Say the word yes.' }] }],
+                  generationConfig: { maxOutputTokens: 10, temperature: 0 }
+                })
+              });
+              const testData = await testRes.json();
+              if (!testData.error && testData.candidates) {
+                activeModel = model;
+                // store which endpoint worked
+                activeEndpoint = testUrl.replace(`:generateContent`,'');
+                log(`  ✓ Active model: ${model}`, 's');
+                const statusEl = document.getElementById('tokenStatusText');
+                if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
+                worked = true;
+                return model;
+              } else {
+                log(`  ✗ ${model} (${testUrl.includes('v1beta') ? 'v1beta1' : 'v1'}): ${testData.error?.message?.slice(0,60) || 'no candidates'}`, 'e');
+              }
+            } catch(innerE) {
+              log(`  ✗ ${model}: ${innerE.message.slice(0,60)}`, 'e');
+            }
           }
-          log(`  ✗ ${model}: ${testData.error?.message?.slice(0,50) || 'failed'}`, 'e');
         } catch(e) {
-          log(`  ✗ ${model}: ${e.message.slice(0,50)}`, 'e');
+          log(`  ✗ ${model}: ${e.message.slice(0,60)}`, 'e');
         }
         await new Promise(r => setTimeout(r, 200));
       }
@@ -669,22 +730,34 @@
       for (const model of FALLBACK) {
         try {
           log(`  Testing ${model}...`);
-          const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
-          const res = await fetch(url, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
-              generationConfig: { maxOutputTokens: 5, temperature: 0 }
-            })
-          });
-          const data = await res.json();
-          if (!data.error && data.candidates) {
-            activeModel = model;
-            log(`  ✓ Active model: ${model}`, 's');
-            const statusEl = document.getElementById('tokenStatusText');
-            if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
-            return model;
+          const endpoints = [
+            `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`,
+            `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`
+          ];
+          for (const url of endpoints) {
+            try {
+              const res = await fetch(url, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ role: 'user', parts: [{ text: 'Say the word yes.' }] }],
+                  generationConfig: { maxOutputTokens: 10, temperature: 0 }
+                })
+              });
+              const data = await res.json();
+              if (!data.error && data.candidates) {
+                activeModel = model;
+                activeEndpoint = url.replace(':generateContent','');
+                log(`  ✓ Active model: ${model}`, 's');
+                const statusEl = document.getElementById('tokenStatusText');
+                if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
+                return model;
+              } else {
+                log(`  ✗ ${model}: ${data.error?.message?.slice(0,60) || 'failed'}`, 'e');
+              }
+            } catch(e3) {
+              log(`  ✗ ${model}: ${e3.message.slice(0,50)}`, 'e');
+            }
           }
         } catch(e2) {}
         await new Promise(r => setTimeout(r, 200));
@@ -695,18 +768,20 @@
   }
 
   async function callClaude(prompt) {
-    if (!gcpToken) throw new Error('No GCP token. Please launch this agent from the DevAgent Hub.');
+    const key = document.getElementById('geminiKey').value.trim();
+    if (!key) throw new Error('Please enter your Gemini API key');
     const model = await discoverModel();
-    const location = 'us-central1';
-    const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 1024, temperature: 0.3 }
-      })
-    });
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 1024, temperature: 0.3 }
+        })
+      }
+    );
     const data = await res.json();
     if (data.error) throw new Error(data.error.message);
     return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
