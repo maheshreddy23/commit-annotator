@@ -444,7 +444,9 @@
     if (blink) blink.closest('.log-line')?.remove();
     const line = document.createElement('div');
     line.className = 'log-line';
-    line.innerHTML = `<span class="log-time">${logTime()}</span><span class="log-${type}">${msg}</span>`;
+    const typeMap = {'success':'log-success','info':'log-info','warn':'log-warn','error':'log-error','s':'log-success','i':'log-info','w':'log-warn','e':'log-error'};
+    const cls = typeMap[type] || 'log-info';
+    line.innerHTML = `<span class="log-time">${logTime()}</span><span class="${cls}">${msg}</span>`;
     body.appendChild(line);
     const cursor = document.createElement('div');
     cursor.className = 'log-line';
@@ -583,12 +585,12 @@
       const remaining = expires ? Math.max(0, Math.floor((parseInt(expires) - Date.now()) / 60000)) : '?';
       document.getElementById('tokenStatusText').innerHTML =
         `<span style="color:#34a853;">✓ GCP token received from Hub — Project: ${gcpProject} — Expires in ~${remaining} min</span>`;
-      log('✓ GCP OAuth token loaded from Hub', 'success');
-      log(`  Project: ${gcpProject}`, 'info');
+      log('✓ GCP OAuth token loaded from Hub', 's');
+      log(`  Project: ${gcpProject}`, 'i');
     } else {
       document.getElementById('tokenStatusText').innerHTML =
         `<span style="color:#fbbc04;">⚠ No token found. <a href="https://maheshreddy23.github.io/gcp-setup/" style="color:#00e5cc;">← Go to Hub to sign in</a></span>`;
-      log('⚠ No token in URL — open from the DevAgent Hub', 'warn');
+      log('⚠ No token in URL — open from the DevAgent Hub', 'w');
     }
   }
 
