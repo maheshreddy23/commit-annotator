@@ -606,7 +606,7 @@
     const location = 'us-central1';
 
     // Priority: prefer flash > pro, newer > older
-    const PRIORITY = ['gemini-2.0-flash', 'gemini-2.0', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini'];
+    const PRIORITY = ['gemini-3.1-flash-lite-preview','gemini-3.1-pro-preview','gemini-3-flash-preview','gemini-3-pro-preview','gemini-2.0-flash','gemini-1.5-flash','gemini-1.5-pro','gemini-1.0-pro'];
 
     try {
       // Fetch real list of publisher models from Vertex AI
@@ -665,7 +665,7 @@
     } catch(e) {
       // If list API fails, fall back to testing known models
       log(`  List API failed (${e.message.slice(0,50)}), trying known models...`, 'w');
-      const FALLBACK = ['gemini-2.0-flash','gemini-1.5-flash','gemini-1.5-pro','gemini-1.0-pro'];
+      const FALLBACK = ['gemini-3.1-flash-lite-preview','gemini-3.1-pro-preview','gemini-3-flash-preview','gemini-3-pro-preview','gemini-2.0-flash','gemini-1.5-flash'];
       for (const model of FALLBACK) {
         try {
           log(`  Testing ${model}...`);
