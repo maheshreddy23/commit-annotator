@@ -583,32 +583,27 @@
     if (!key) throw new Error('Please enter your Gemini API key');
 
     log('🔍 Fetching available models from Gemini API...', 'w');
-
     try {
-      // Fetch real list of available models
       const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
 
-      // Filter to models that support generateContent
       const models = (data.models || [])
         .filter(m => m.supportedGenerationMethods?.includes('generateContent'))
         .map(m => m.name.replace('models/', ''));
 
-      log(`  Found ${models.length} available models`, 's');
+      log(`  Found ${models.length} models`, 's');
 
-      // Priority order — flash first (faster/cheaper), pro second
-      const priority = ['flash', 'pro'];
       const sorted = models.sort((a, b) => {
-        const pa = priority.findIndex(p => a.includes(p));
-        const pb = priority.findIndex(p => b.includes(p));
+        const order = ['flash', 'pro'];
+        const pa = order.findIndex(p => a.includes(p));
+        const pb = order.findIndex(p => b.includes(p));
         return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
       });
 
-      log(`  Top models: ${sorted.slice(0,4).join(', ')}`, 'i');
+      log(`  Trying: ${sorted.slice(0,4).join(', ')}...`);
 
-      // Test top models until one works
-      for (const model of sorted.slice(0, 6)) {
+      for (const model of sorted.slice(0, 8)) {
         try {
           log(`  Testing ${model}...`);
           const testRes = await fetch(
@@ -625,146 +620,21 @@
           const testData = await testRes.json();
           if (!testData.error && testData.candidates) {
             activeModel = model;
-            log(`  ✓ Using model: ${model}`, 's');
+            log(`  ✓ Using: ${model}`, 's');
             document.getElementById('tokenStatusText').innerHTML =
-              `<span style="color:#4fffb0;">✓ Gemini API ready &nbsp;|&nbsp; 🤖 ${model}</span>`;
+              `<span style="color:#4fffb0;">✓ Gemini ready &nbsp;|&nbsp; 🤖 ${model}</span>`;
             return model;
-          } else {
-            log(`  ✗ ${model}: ${testData.error?.message?.slice(0,50) || 'failed'}`, 'e');
           }
+          log(`  ✗ ${model}: ${testData.error?.message?.slice(0,50) || 'no candidates'}`, 'e');
         } catch(e) {
           log(`  ✗ ${model}: ${e.message.slice(0,50)}`, 'e');
         }
-        await new Promise(r => setTimeout(r, 200));
+        await new Promise(r => setTimeout(r, 150));
       }
-      throw new Error('No working model found. Check your API key is valid.');
-
+      throw new Error('No working model found. Check your Gemini API key.');
     } catch(e) {
       throw new Error(`Model discovery failed: ${e.message}`);
     }
-  }
-
-  async function discoverModel() {
-    if (activeModel) return activeModel;
-    if (!gcpToken) throw new Error('No GCP token. Please launch from DevAgent Hub.');
-
-    log('🔍 Fetching available models from Vertex AI...', 'w');
-    const location = 'us-central1';
-
-    // Priority: prefer flash > pro, newer > older
-    const PRIORITY = ['gemini-3.1-flash-lite-preview','gemini-3.1-pro-preview','gemini-3-flash-preview','gemini-3-pro-preview','gemini-2.0-flash','gemini-1.5-flash','gemini-1.5-pro','gemini-1.0-pro'];
-
-    try {
-      // Fetch real list of publisher models from Vertex AI
-      const listUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models`;
-      const listRes = await fetch(listUrl, {
-        headers: { 'Authorization': `Bearer ${gcpToken}` }
-      });
-      const listData = await listRes.json();
-
-      if (listData.error) throw new Error(listData.error.message);
-
-      // Extract model IDs that support generateContent
-      const models = (listData.publisherModels || [])
-        .map(m => m.name?.split('/').pop())
-        .filter(id => id && id.includes('gemini'));
-
-      log(`  Found ${models.length} Gemini models`, 's');
-
-      // Sort by priority
-      const sorted = models.sort((a, b) => {
-        const pa = PRIORITY.findIndex(p => a.includes(p.replace('gemini-','').replace('gemini','')));
-        const pb = PRIORITY.findIndex(p => b.includes(p.replace('gemini-','').replace('gemini','')));
-        return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
-      });
-
-      log(`  Prioritized order: ${sorted.slice(0,4).join(', ')}...`);
-
-      // Test each model until one works
-      for (const model of sorted) {
-        try {
-          log(`  Testing ${model}...`);
-          // Try both v1 and v1beta endpoints
-          const endpoints = [
-            `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`,
-            `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`
-          ];
-          let worked = false;
-          for (const testUrl of endpoints) {
-            try {
-              const testRes = await fetch(testUrl, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [{ role: 'user', parts: [{ text: 'Say the word yes.' }] }],
-                  generationConfig: { maxOutputTokens: 10, temperature: 0 }
-                })
-              });
-              const testData = await testRes.json();
-              if (!testData.error && testData.candidates) {
-                activeModel = model;
-                // store which endpoint worked
-                activeEndpoint = testUrl.replace(`:generateContent`,'');
-                log(`  ✓ Active model: ${model}`, 's');
-                const statusEl = document.getElementById('tokenStatusText');
-                if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
-                worked = true;
-                return model;
-              } else {
-                log(`  ✗ ${model} (${testUrl.includes('v1beta') ? 'v1beta1' : 'v1'}): ${testData.error?.message?.slice(0,60) || 'no candidates'}`, 'e');
-              }
-            } catch(innerE) {
-              log(`  ✗ ${model}: ${innerE.message.slice(0,60)}`, 'e');
-            }
-          }
-        } catch(e) {
-          log(`  ✗ ${model}: ${e.message.slice(0,60)}`, 'e');
-        }
-        await new Promise(r => setTimeout(r, 200));
-      }
-
-    } catch(e) {
-      // If list API fails, fall back to testing known models
-      log(`  List API failed (${e.message.slice(0,50)}), trying known models...`, 'w');
-      const FALLBACK = ['gemini-3.1-flash-lite-preview','gemini-3.1-pro-preview','gemini-3-flash-preview','gemini-3-pro-preview','gemini-2.0-flash','gemini-1.5-flash'];
-      for (const model of FALLBACK) {
-        try {
-          log(`  Testing ${model}...`);
-          const endpoints = [
-            `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`,
-            `https://${location}-aiplatform.googleapis.com/v1beta1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`
-          ];
-          for (const url of endpoints) {
-            try {
-              const res = await fetch(url, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  contents: [{ role: 'user', parts: [{ text: 'Say the word yes.' }] }],
-                  generationConfig: { maxOutputTokens: 10, temperature: 0 }
-                })
-              });
-              const data = await res.json();
-              if (!data.error && data.candidates) {
-                activeModel = model;
-                activeEndpoint = url.replace(':generateContent','');
-                log(`  ✓ Active model: ${model}`, 's');
-                const statusEl = document.getElementById('tokenStatusText');
-                if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
-                return model;
-              } else {
-                log(`  ✗ ${model}: ${data.error?.message?.slice(0,60) || 'failed'}`, 'e');
-              }
-            } catch(e3) {
-              log(`  ✗ ${model}: ${e3.message.slice(0,50)}`, 'e');
-            }
-          }
-        } catch(e2) {}
-        await new Promise(r => setTimeout(r, 200));
-      }
-    }
-
-    throw new Error('No working Gemini model found. Please ensure Vertex AI API is enabled in GCP Console.');
   }
 
   async function callClaude(prompt) {
