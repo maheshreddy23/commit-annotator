@@ -596,10 +596,108 @@
 
   window.addEventListener('load', loadTokenFromURL);
 
+  let activeModel = null;
+
+  async function discoverModel() {
+    if (activeModel) return activeModel;
+    if (!gcpToken) throw new Error('No GCP token. Please launch from DevAgent Hub.');
+
+    log('🔍 Fetching available models from Vertex AI...', 'w');
+    const location = 'us-central1';
+
+    // Priority: prefer flash > pro, newer > older
+    const PRIORITY = ['gemini-2.0-flash', 'gemini-2.0', 'gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini'];
+
+    try {
+      // Fetch real list of publisher models from Vertex AI
+      const listUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models`;
+      const listRes = await fetch(listUrl, {
+        headers: { 'Authorization': `Bearer ${gcpToken}` }
+      });
+      const listData = await listRes.json();
+
+      if (listData.error) throw new Error(listData.error.message);
+
+      // Extract model IDs that support generateContent
+      const models = (listData.publisherModels || [])
+        .map(m => m.name?.split('/').pop())
+        .filter(id => id && id.includes('gemini'));
+
+      log(`  Found ${models.length} Gemini models`, 's');
+
+      // Sort by priority
+      const sorted = models.sort((a, b) => {
+        const pa = PRIORITY.findIndex(p => a.includes(p.replace('gemini-','').replace('gemini','')));
+        const pb = PRIORITY.findIndex(p => b.includes(p.replace('gemini-','').replace('gemini','')));
+        return (pa === -1 ? 99 : pa) - (pb === -1 ? 99 : pb);
+      });
+
+      log(`  Prioritized order: ${sorted.slice(0,4).join(', ')}...`);
+
+      // Test each model until one works
+      for (const model of sorted) {
+        try {
+          log(`  Testing ${model}...`);
+          const testUrl = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
+          const testRes = await fetch(testUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
+              generationConfig: { maxOutputTokens: 5, temperature: 0 }
+            })
+          });
+          const testData = await testRes.json();
+          if (!testData.error && testData.candidates) {
+            activeModel = model;
+            log(`  ✓ Active model: ${model}`, 's');
+            const statusEl = document.getElementById('tokenStatusText');
+            if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
+            return model;
+          }
+          log(`  ✗ ${model}: ${testData.error?.message?.slice(0,50) || 'failed'}`, 'e');
+        } catch(e) {
+          log(`  ✗ ${model}: ${e.message.slice(0,50)}`, 'e');
+        }
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+    } catch(e) {
+      // If list API fails, fall back to testing known models
+      log(`  List API failed (${e.message.slice(0,50)}), trying known models...`, 'w');
+      const FALLBACK = ['gemini-2.0-flash','gemini-1.5-flash','gemini-1.5-pro','gemini-1.0-pro'];
+      for (const model of FALLBACK) {
+        try {
+          log(`  Testing ${model}...`);
+          const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${gcpToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ role: 'user', parts: [{ text: 'Hi' }] }],
+              generationConfig: { maxOutputTokens: 5, temperature: 0 }
+            })
+          });
+          const data = await res.json();
+          if (!data.error && data.candidates) {
+            activeModel = model;
+            log(`  ✓ Active model: ${model}`, 's');
+            const statusEl = document.getElementById('tokenStatusText');
+            if (statusEl) statusEl.innerHTML += ` &nbsp;|&nbsp; <span style="color:#4fffb0;">🤖 ${model}</span>`;
+            return model;
+          }
+        } catch(e2) {}
+        await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    throw new Error('No working Gemini model found. Please ensure Vertex AI API is enabled in GCP Console.');
+  }
+
   async function callClaude(prompt) {
     if (!gcpToken) throw new Error('No GCP token. Please launch this agent from the DevAgent Hub.');
+    const model = await discoverModel();
     const location = 'us-central1';
-    const model = 'gemini-2.0-flash-001';
     const url = `https://${location}-aiplatform.googleapis.com/v1/projects/${gcpProject}/locations/${location}/publishers/google/models/${model}:generateContent`;
     const res = await fetch(url, {
       method: 'POST',
